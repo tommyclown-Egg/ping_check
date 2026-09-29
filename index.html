@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>早押しPingチェック</title>
+<style>
+/* 1カラム・スマホ優先。結果の数字を主役にした計測画面 */
+:root{
+  --bg:#f3f5f7; --card:#ffffff; --fg:#17202a; --muted:#5d6b78; --line:#dde3e9;
+  --accent:#1f5fbf; --accent-fg:#ffffff;
+  --good:#1d7a46; --good-bg:#e3f4ea; --warn:#9a6300; --warn-bg:#fdf1d8; --bad:#b3261e; --bad-bg:#fbe4e2;
+  --font:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#12161b; --card:#1b2129; --fg:#e8edf2; --muted:#98a6b3; --line:#2b3440;
+  --accent:#5b9bff; --accent-fg:#0b1220;
+  --good:#6fd39a; --good-bg:#15301f; --warn:#f0c060; --warn-bg:#352a10; --bad:#ff8a80; --bad-bg:#3a1a18;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:16px;line-height:1.6;
+  padding:max(20px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:480px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:22px;margin:0;letter-spacing:.02em}
+.lead{margin:0;color:var(--muted);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+input{width:100%;font:inherit;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+button{width:100%;font:inherit;font-weight:700;font-size:18px;padding:16px;border:0;border-radius:12px;
+  background:var(--accent);color:var(--accent-fg);cursor:pointer;margin-top:14px}
+button:disabled{opacity:.55;cursor:default}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.result{text-align:center;display:grid;gap:10px}
+.who{font-size:15px;color:var(--muted);min-height:1.6em}
+.big{font-size:64px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.big small{font-size:22px;font-weight:600;margin-left:4px}
+.badge{justify-self:center;font-weight:700;padding:6px 16px;border-radius:999px;font-size:16px}
+.badge.good{background:var(--good-bg);color:var(--good)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+.badge.bad{background:var(--bad-bg);color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+.stat{border-top:1px solid var(--line);padding-top:8px}
+.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted)}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+.advice{font-size:14px;margin:0;text-align:left}
+.meta{font-size:12px;color:var(--muted);margin:0;font-family:var(--mono);word-break:break-all}
+ul{margin:0;padding-left:1.2em;font-size:14px}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>早押しPingチェック</h1>
+    <p class="lead">早押しボタンのサーバーまでの応答時間を測ります。使うデータは数十KB程度です。</p>
+  </header>
+
+  <section class="card">
+    <label for="name">名前(結果画面に表示されます)</label>
+    <input id="name" type="text" maxlength="20" placeholder="例:たなか" autocomplete="nickname">
+    <button id="start" type="button">計測スタート</button>
+  </section>
+
+  <section class="card result" id="resultCard" aria-live="polite">
+    <div class="who" id="who">まだ計測していません</div>
+    <div class="big" id="big">--<small>ms</small></div>
+    <div class="badge" id="badge" hidden></div>
+    <div class="bar" id="barWrap" hidden><i id="bar"></i></div>
+    <div class="stats">
+      <div class="stat"><b id="sMin">--</b><span>最小</span></div>
+      <div class="stat"><b id="sMax">--</b><span>最大</span></div>
+      <div class="stat"><b id="sJit">--</b><span>ばらつき</span></div>
+    </div>
+    <p class="advice" id="advice" hidden></p>
+    <p class="meta" id="meta"></p>
+  </section>
+
+  <section class="card">
+    <ul>
+      <li>早押しで使うのと同じ回線(Wi-Fiかモバイル)で測ってください。</li>
+      <li>他のアプリや動画は閉じてから測ると正確です。</li>
+      <li>計測後、この画面を司会者に見せるかスクリーンショットを送ってください。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+(() => {
+  // 計測先:早押しボタンオンライン。?server=https://... で自前サーバーにも変更可
+  let SERVER = 'https://btn.anyfrog.net';
+  try {
+    const q = new URLSearchParams(location.search).get('server');
+    if (q && /^https?:\/\/[^\s"'<>]+$/.test(q)) SERVER = q.replace(/\/+$/, '');
+  } catch (e) {}
+  const WARMUP = 3, SAMPLES = 15, INTERVAL = 250;
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  try { $('name').value = localStorage.getItem('pingName') || ''; } catch (e) {}
+
+  async function once() {
+    // 数十バイトの応答しか返さない軽いAPIを叩く。キャッシュ回避のため毎回クエリを変える
+    const url = SERVER + '/getSessionIdFromPassword?pass=0000&t=' + Date.now() + Math.random();
+    const t0 = performance.now();
+    await fetch(url, { mode: 'no-cors', cache: 'no-store', credentials: 'omit' });
+    return performance.now() - t0;
+  }
+
+  function judge(med, jit) {
+    if (med <= 50 && jit <= 30) return ['good', '問題なし', '早押しに十分な速さです。'];
+    if (med <= 100 && jit <= 60) return ['warn', 'やや遅い', '窓際や電波の良い場所へ移動するか、他のアプリを閉じてもう一度測ってください。'];
+    return ['bad', '要改善', '応答が遅いか、ばらつきが大きい状態です。場所を変える、Wi-Fiとモバイル回線を切り替えるなどしてから測り直してください。'];
+  }
+
+  $('start').addEventListener('click', async () => {
+    const name = $('name').value.trim();
+    try { localStorage.setItem('pingName', name); } catch (e) {}
+    const btn = $('start');
+    btn.disabled = true; btn.textContent = '計測中…';
+    $('who').textContent = name ? name + ' さん' : '名前なし';
+    $('big').innerHTML = '--<small>ms</small>';
+    ['badge', 'advice'].forEach(id => $(id).hidden = true);
+    ['sMin', 'sMax', 'sJit'].forEach(id => $(id).textContent = '--');
+    $('barWrap').hidden = false; $('bar').style.width = '0%';
+
+    const results = [];
+    let errors = 0;
+    const total = WARMUP + SAMPLES;
+    for (let i = 0; i < total; i++) {
+      try {
+        const ms = await once();
+        if (i >= WARMUP) results.push(ms); // 最初の数回は接続準備を含むので除外
+      } catch (e) { errors++; }
+      $('bar').style.width = ((i + 1) / total * 100) + '%';
+      await sleep(INTERVAL);
+    }
+    $('barWrap').hidden = true;
+    btn.disabled = false; btn.textContent = 'もう一度測る';
+
+    if (results.length < 5) {
+      $('badge').className = 'badge bad'; $('badge').textContent = '計測できません'; $('badge').hidden = false;
+      $('advice').textContent = 'サーバーに接続できませんでした。電波状況を確認して、もう一度お試しください。';
+      $('advice').hidden = false;
+      $('meta').textContent = '失敗 ' + errors + '回 / ' + SERVER;
+      return;
+    }
+    const s = [...results].sort((a, b) => a - b);
+    const med = s[Math.floor(s.length / 2)];
+    const min = s[0], max = s[s.length - 1];
+    // ばらつき:上位10%を除いた範囲(たまたまの1回に引っ張られないように)
+    const p90 = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
+    const jit = p90 - min;
+    const [cls, label, text] = judge(med, jit);
+
+    $('big').innerHTML = Math.round(med) + '<small>ms</small>';
+    $('sMin').textContent = Math.round(min) + 'ms';
+    $('sMax').textContent = Math.round(max) + 'ms';
+    $('sJit').textContent = Math.round(jit) + 'ms';
+    $('badge').className = 'badge ' + cls; $('badge').textContent = label; $('badge').hidden = false;
+    $('advice').textContent = text; $('advice').hidden = false;
+    const now = new Date();
+    $('meta').textContent = now.toLocaleTimeString('ja-JP') + ' 計測 / ' + results.length + '回' +
+      (errors ? '(失敗' + errors + '回)' : '') + ' / ' + SERVER.replace(/^https?:\/\//, '');
+  });
+})();
+</script>
+</body>
+</html>
